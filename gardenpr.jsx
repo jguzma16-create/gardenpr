@@ -1,24 +1,5 @@
-<!DOCTYPE html>
-<html lang="es">
-<head>
-  <meta charset="UTF-8"/>
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
-  <title>GardenPR</title>
-  <script src="https://unpkg.com/react@18/umd/react.development.js"></script>
-  <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
-  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
-  <style>
-    * { box-sizing: border-box; margin: 0; padding: 0; }
-    body { font-family: system-ui, -apple-system, sans-serif; background: #f0f7f2; }
-  </style>
-</head>
-<body>
-  <div id="root"></div>
-  <script type="text/babel">
-    const { useState, useRef, useEffect } = React;
-
-
+import { useState, useRef, useEffect } from "react";
+import { createClient } from "@supabase/supabase-js";
 
 // ═══════════════════════════════════════════════════════════════════════
 // CONFIGURACIÓN SUPABASE
@@ -26,7 +7,7 @@
 // ═══════════════════════════════════════════════════════════════════════
 const SUPABASE_URL  = "https://yualqthoonzgemssiagf.supabase.co";
 const SUPABASE_ANON = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Inl1YWxxdGhvb256Z2Vtc3NpYWdmIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODEzNzI1NzMsImV4cCI6MjA5Njk0ODU3M30.jtS9DjSnSudRigjc_l2Uj_Itm-sPeBHtJHK64T4J6ik";
-const sb = supabase.createClient(SUPABASE_URL, SUPABASE_ANON);
+const sb = createClient(SUPABASE_URL, SUPABASE_ANON);
 
 // ═══════════════════════════════════════════════════════════════════════
 // CATÁLOGOS
@@ -1418,7 +1399,7 @@ function PantallaCarga() {
 // ════════════════════════════════════════════════════════════════════════
 // APP ROOT
 // ════════════════════════════════════════════════════════════════════════
-function App() {
+export default function App() {
   const [user, setUser] = React.useState(null);
   const [recoveryMode, setRecoveryMode] = React.useState(false);
   const [cargando, setCargando] = React.useState(true);
@@ -1468,9 +1449,3 @@ function App() {
     </>
   );
 }
-
-    const root = ReactDOM.createRoot(document.getElementById('root'));
-    root.render(<App/>);
-  </script>
-</body>
-</html>
