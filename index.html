@@ -1515,6 +1515,8 @@ function App() {
       var script = document.createElement('script');
       script.textContent = compiled.code;
       document.head.appendChild(script);
+      // Render AFTER script injection, from bootstrap scope (not compiled script scope)
+      ReactDOM.createRoot(document.getElementById('root')).render(React.createElement(App));
     })();
   </script>
 </body>
