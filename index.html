@@ -1508,7 +1508,10 @@ function App() {
   <script>
     (function() {
       var src = document.getElementById('app-source').textContent;
-      var compiled = Babel.transform(src, { presets: ['react'], sourceType: 'script' });
+      var compiled = Babel.transform(src, {
+        presets: [['react', { runtime: 'classic' }]],
+        sourceType: 'script'
+      });
       var script = document.createElement('script');
       script.textContent = compiled.code;
       document.head.appendChild(script);
