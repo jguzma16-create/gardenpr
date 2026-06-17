@@ -15,10 +15,8 @@
 </head>
 <body>
   <div id="root"></div>
-  <script type="text/babel" data-presets="react" data-type="script">
+  <script id="app-source" type="text/plain">
     const { useState, useRef, useEffect } = React;
-
-
 
 // ═══════════════════════════════════════════════════════════════════════
 // CONFIGURACIÓN SUPABASE
@@ -1506,8 +1504,15 @@ function App() {
   );
 }
 
-
-ReactDOM.createRoot(document.getElementById('root')).render(<App/>);
+  </script>
+  <script>
+    (function() {
+      var src = document.getElementById('app-source').textContent;
+      var compiled = Babel.transform(src, { presets: ['react'], sourceType: 'script' });
+      var script = document.createElement('script');
+      script.textContent = compiled.code;
+      document.head.appendChild(script);
+    })();
   </script>
 </body>
 </html>
