@@ -76,15 +76,8 @@ function getMunicipioCoords(mun) {
 function m2ToSqft(m2) { return m2 * 10.7639; }
 function calcularPrecio(sqft) { return Math.min(Math.max(Math.round(sqft * 0.018), 35), 180); }
 
-async function fetchParcelaArea() {
-  try {
-    const url = `https://sigejp.pr.gov/server/rest/services/crim/crim_parcelas/MapServer/0/query?where=TIPO%3D%27P%27&outFields=OBJECTID%2C%22SHAPE.STArea()%22%2CNUM_CATASTRO&returnGeometry=false&f=json&resultRecordCount=5`;
-    const r = await fetch(url);
-    const d = await r.json();
-    const f = d.features?.find(x => x.attributes["SHAPE.STArea()"] > 0);
-    if (f) return { areM2: f.attributes["SHAPE.STArea()"], catastro: f.attributes["NUM_CATASTRO"]||"N/D", fuente:"CRIM" };
-  } catch {}
-  return { areM2: 560+Math.random()*440, catastro:"Estimado", fuente:"Promedio PR" };
+function fetchParcelaArea() {
+  return Promise.resolve({ areM2: 560+Math.random()*440, catastro:"Estimado", fuente:"Promedio PR" });
 }
 
 // ═══════════════════════════════════════════════════════════════════════
@@ -213,7 +206,7 @@ function ModalPago({ total, onPagar, onCerrar }) {
     await new Promise(r=>setTimeout(r,1800));
     setProcesando(false); setExito(true);
     await new Promise(r=>setTimeout(r,1000));
-    onPagar(metodo);
+    await onPagar(metodo);
   }
   return (
     <div style={{ position:"fixed", inset:0, zIndex:100, background:"#000b", display:"flex", alignItems:"flex-end" }}>
@@ -400,8 +393,8 @@ function PerfilModal({ p, precio, onSelect, onClose }) {
         </div>
         <div style={{ padding:"14px 20px", borderBottom:`1px solid ${C.borde}` }}>
           <div style={ST.sec}>⭐ Reseñas ({resenas.length})</div>
-          {resenas.map((r,i)=>(
-            <div key={i} style={{ borderBottom:`1px solid ${C.borde}`, paddingBottom:10, marginBottom:10 }}>
+          {resenas.map(r=>(
+            <div key={r.id} style={{ borderBottom:`1px solid ${C.borde}`, paddingBottom:10, marginBottom:10 }}>
               <div style={{ display:"flex", justifyContent:"space-between" }}><span style={{ fontWeight:700, fontSize:13 }}>{r.autor_nombre||"Cliente"}</span><span style={{ fontSize:11, color:C.gris }}>{new Date(r.created_at).toLocaleDateString("es-PR")}</span></div>
               <Stars v={r.stars} size={12}/><p style={{ margin:"4px 0 0", fontSize:13, color:"#4a5a4e" }}>{r.texto}</p>
             </div>
@@ -496,8 +489,8 @@ function PantallaReputacion({ user, onBack }) {
             <div style={{ fontWeight:700, fontSize:16 }}>Aún sin reseñas</div>
             <div style={{ fontSize:13, marginTop:6 }}>Las reseñas de proveedores aparecerán aquí después de cada servicio</div>
           </div>
-        ) : resenas.map((r,i) => (
-          <div key={i} style={{ ...ST.card, marginBottom:10 }}>
+        ) : resenas.map(r => (
+          <div key={r.id} style={{ ...ST.card, marginBottom:10 }}>
             <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-start", marginBottom:6 }}>
               <span style={{ fontWeight:700, fontSize:14, color:C.texto }}>🌿 {r.autor_nombre||"Proveedor"}</span>
               <span style={{ fontSize:11, color:C.gris }}>{new Date(r.created_at).toLocaleDateString("es-PR",{ day:"2-digit", month:"short", year:"numeric" })}</span>
@@ -584,6 +577,11 @@ function PantallaAuth({ onAuth, recoveryMode, onRecoveryDone }) {
     setLoading(true); setError("");
     const { error: e } = await sb.auth.updateUser({ password: newPassword });
     if (e) { setError(e.message); setLoading(false); return; }
+    const { data:{ session } } = await sb.auth.getSession();
+    if (session?.user) {
+      const { data: perfil } = await sb.from("profiles").select("*").eq("id", session.user.id).single();
+      if (perfil) { onRecoveryDone?.(); onAuth({ ...perfil, uid: session.user.id }); setLoading(false); return; }
+    }
     onRecoveryDone?.();
     setLoading(false);
   }
@@ -752,6 +750,7 @@ function PantallaCliente({ user, onLogout }) {
   const [parcela, setParcela] = useState(null);
   const [areaTotalSqft, setAreaTotalSqft] = useState(0);
   const [areaCespedSqft, setAreaCespedSqft] = useState(0);
+  const [areaCespedEditable, setAreaCespedEditable] = useState(0);
   const [precio, setPrecio] = useState(0);
   const [extras, setExtras] = useState([]);
   const [proveedores, setProveedores] = useState([]);
@@ -802,9 +801,11 @@ function PantallaCliente({ user, onLogout }) {
     const info = await fetchParcelaArea();
     const totalM2 = info.areM2;
     const cespedM2 = Math.max(totalM2 - (ESTRUCTURA_M2[tipoProp]||0), 0);
+    const sqftCesped = m2ToSqft(cespedM2);
     setAreaTotalSqft(m2ToSqft(totalM2));
-    setAreaCespedSqft(m2ToSqft(cespedM2));
-    setPrecio(calcularPrecio(m2ToSqft(cespedM2)));
+    setAreaCespedSqft(sqftCesped);
+    setAreaCespedEditable(Math.round(sqftCesped));
+    setPrecio(calcularPrecio(sqftCesped));
     setParcela(info);
     const c = getMunicipioCoords(municipio);
     setCoords({ lat:c.lat+(Math.random()-.5)*.01, lng:c.lng+(Math.random()-.5)*.01 });
@@ -832,22 +833,24 @@ function PantallaCliente({ user, onLogout }) {
       estado: "pendiente",
     }).select().single();
 
-    if (!error && sol) {
-      setSolicitudActual(sol);
-      // Notificar al proveedor
-      await sb.from("notificaciones").insert([
-        { usuario_id: proveedorSel.id, tipo:"nueva_solicitud", titulo:"🌿 Nueva solicitud", cuerpo:`${direccion}, ${municipio} · $${precioTotal}`, data: sol },
-        { usuario_id: user.id, tipo:"confirmacion", titulo:"✅ Servicio confirmado", cuerpo:`${proveedorSel.nombre} recibirá tu solicitud · ETA ${proveedorSel.eta}`, data: sol },
-      ]);
+    if (error || !sol) {
+      setPagoModal(false);
+      alert("No se pudo registrar el servicio. Intenta de nuevo.");
+      return;
     }
+    setSolicitudActual(sol);
+    await sb.from("notificaciones").insert([
+      { usuario_id: proveedorSel.id, tipo:"nueva_solicitud", titulo:"🌿 Nueva solicitud", cuerpo:`${direccion}, ${municipio} · $${precioTotal}`, data: sol },
+      { usuario_id: user.id, tipo:"confirmacion", titulo:"✅ Servicio confirmado", cuerpo:`${proveedorSel.nombre} recibirá tu solicitud · ETA ${proveedorSel.eta}`, data: sol },
+    ]);
     setPagoModal(false);
     setVista("confirmado");
   }
 
-  async function marcarLeidas() {
+  const marcarLeidas = useCallback(async () => {
     await sb.from("notificaciones").update({ leida:true }).eq("usuario_id", user.id).eq("leida", false);
     setNotifs(prev=>prev.map(n=>({ ...n, leida:true })));
-  }
+  }, [user.id]);
 
   async function cancelarServicio() {
     if (!solicitudActual) return;
@@ -870,7 +873,7 @@ function PantallaCliente({ user, onLogout }) {
   }
 
   // Auto-marcar al abrir paneles
-  useEffect(()=>{ if (showNotifs) marcarLeidas(); },[showNotifs]);
+  useEffect(()=>{ if (showNotifs) marcarLeidas(); },[showNotifs, marcarLeidas]);
   useEffect(()=>{ if (showChat) setChatNoLeidos(0); },[showChat]);
 
   // Badge chat: escuchar mensajes nuevos dirigidos al cliente
@@ -966,8 +969,22 @@ function PantallaCliente({ user, onLogout }) {
               <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:10, marginBottom:12 }}>
                 <StatBox label="Parcela total" val={areaTotalSqft.toFixed(0)} unit="ft²"/>
                 <StatBox label="Estructura -" val={m2ToSqft(ESTRUCTURA_M2[tipoProp]).toFixed(0)} unit="ft²" dim/>
-                <StatBox label="Área de césped" val={areaCespedSqft.toFixed(0)} unit="ft²" hi/>
+                <StatBox label="Área de césped" val={areaCespedEditable} unit="ft²" hi/>
                 <StatBox label="Precio base" val={`$${precio}`} unit="USD" hi/>
+              </div>
+              <div style={{ background:"#ffffff18", borderRadius:12, padding:"10px 14px" }}>
+                <div style={{ fontSize:10, opacity:.7, marginBottom:6, textTransform:"uppercase", letterSpacing:.5 }}>Ajustar área de césped (ft²)</div>
+                <input
+                  type="number"
+                  value={areaCespedEditable}
+                  onChange={e=>{
+                    const v = Math.max(0, Number(e.target.value));
+                    setAreaCespedEditable(v);
+                    setAreaCespedSqft(v);
+                    setPrecio(calcularPrecio(v));
+                  }}
+                  style={{ width:"100%", boxSizing:"border-box", background:"#fff", border:"none", borderRadius:8, padding:"8px 12px", fontSize:16, fontWeight:700, color:C.texto }}
+                />
               </div>
             </div>
 
@@ -1034,12 +1051,13 @@ function PantallaProveedor({ user, onLogout }) {
   const [showChat, setShowChat] = useState(false);
   const [chatNoLeidos, setChatNoLeidos] = useState(0);
   const [resenasPropias, setResenasPropias] = useState([]);
+  const [subiendo, setSubiendo] = useState(false);
 
   useEffect(()=>{
     if (sub !== "perfil") return;
     sb.from("resenas").select("*").eq("receptor_id", user.id)
       .order("created_at", { ascending:false }).limit(20)
-      .then(({ data })=>data&&setResenasPropias(data.filter(r=>r.tipo!=="proveedor")));
+      .then(({ data })=>data&&setResenasPropias(data.filter(r=>!r.tipo)));
   },[sub, user.id]);
 
   async function subirFoto(file) {
@@ -1080,16 +1098,36 @@ function PantallaProveedor({ user, onLogout }) {
   async function aceptar(s) {
     await sb.from("solicitudes").update({ estado:"en_proceso", proveedor_id:user.id, proveedor_nombre:user.nombre }).eq("id", s.id);
     await sb.from("notificaciones").insert({ usuario_id:s.cliente_id, tipo:"aceptado", titulo:"🌿 Proveedor en camino", cuerpo:`${user.nombre} aceptó tu solicitud y está en camino.`, data:s });
-    setTrabajoActivo({ ...s, fotoAntes:null, fotoDespues:null });
+    const c = getMunicipioCoords(s.municipio);
+    setTrabajoActivo({ ...s, fotoAntes:null, fotoDespues:null, _lat:c.lat+(Math.random()-.5)*.005, _lng:c.lng+(Math.random()-.5)*.005 });
     setSolicitudes(prev=>prev.filter(x=>x.id!==s.id));
     setSub("trabajo");
   }
 
   async function completar() {
-    if (!trabajoActivo.fotoAntes||!trabajoActivo.fotoDespues) return;
-    await sb.from("solicitudes").update({ estado:"completado" }).eq("id", trabajoActivo.id);
+    if (!trabajoActivo.fotoAntes || !trabajoActivo.fotoDespues) return;
+    setSubiendo(true);
+
+    const extA = trabajoActivo.fotoAntes.name.split('.').pop() || 'jpg';
+    const pathA = `${trabajoActivo.id}/antes.${extA}`;
+    const { error: eA } = await sb.storage.from('Evidencia').upload(pathA, trabajoActivo.fotoAntes, { upsert:true });
+    if (eA) { alert('Error subiendo foto antes: ' + eA.message); setSubiendo(false); return; }
+    const { data:{ publicUrl: urlAntes } } = sb.storage.from('Evidencia').getPublicUrl(pathA);
+
+    const extD = trabajoActivo.fotoDespues.name.split('.').pop() || 'jpg';
+    const pathD = `${trabajoActivo.id}/despues.${extD}`;
+    const { error: eD } = await sb.storage.from('Evidencia').upload(pathD, trabajoActivo.fotoDespues, { upsert:true });
+    if (eD) { alert('Error subiendo foto después: ' + eD.message); setSubiendo(false); return; }
+    const { data:{ publicUrl: urlDespues } } = sb.storage.from('Evidencia').getPublicUrl(pathD);
+
+    await sb.from("solicitudes").update({
+      estado: "completado",
+      foto_antes_url: urlAntes,
+      foto_despues_url: urlDespues,
+    }).eq("id", trabajoActivo.id);
     await sb.from("notificaciones").insert({ usuario_id:trabajoActivo.cliente_id, tipo:"completado", titulo:"✅ Trabajo completado", cuerpo:`${user.nombre} completó el corte. ¡Revisa tu propiedad!`, data:trabajoActivo });
     await sb.from("profiles").update({ servicios: (miPerfil.servicios||0)+1 }).eq("id", user.id);
+    setSubiendo(false);
     setCompletados(p=>[{ ...trabajoActivo, estado:"completado" },...p]);
     setGananciaHoy(g=>g+trabajoActivo.precio_total);
     setReseñaModal(true);
@@ -1102,13 +1140,13 @@ function PantallaProveedor({ user, onLogout }) {
     setTimeout(()=>setGuardado(false), 2000);
   }
 
-  async function marcarLeidas() {
+  const marcarLeidas = useCallback(async () => {
     await sb.from("notificaciones").update({ leida:true }).eq("usuario_id", user.id).eq("leida", false);
     setNotifs(prev=>prev.map(n=>({ ...n, leida:true })));
-  }
+  }, [user.id]);
 
   // Auto-marcar al abrir paneles
-  useEffect(()=>{ if (showNotifs) marcarLeidas(); },[showNotifs]);
+  useEffect(()=>{ if (showNotifs) marcarLeidas(); },[showNotifs, marcarLeidas]);
   useEffect(()=>{ if (showChat) setChatNoLeidos(0); },[showChat]);
 
   // Badge chat: escuchar mensajes nuevos dirigidos al proveedor
@@ -1142,12 +1180,11 @@ function PantallaProveedor({ user, onLogout }) {
   // ── Sub: trabajo activo
   if (sub==="trabajo"&&trabajoActivo) {
     const listo = trabajoActivo.fotoAntes&&trabajoActivo.fotoDespues;
-    const c = getMunicipioCoords(trabajoActivo.municipio);
     return (
       <div style={{ minHeight:"100dvh", background:C.bg, fontFamily:"system-ui" }}>
         <BackHeader onBack={()=>setSub("dashboard")} title="Trabajo en curso" sub={`${trabajoActivo.direccion}, ${trabajoActivo.municipio}`} right={<div style={{display:"flex",gap:4,alignItems:"center"}}><div style={{position:"relative",display:"inline-flex"}}><button onClick={()=>setShowChat(true)} style={{background:"none",border:"none",color:C.verde5,fontSize:22,cursor:"pointer",padding:"4px 6px"}}>💬</button>{chatNoLeidos>0&&<span style={{position:"absolute",top:0,right:0,background:"#e03131",color:"#fff",borderRadius:"50%",minWidth:16,height:16,fontSize:10,fontWeight:700,display:"flex",alignItems:"center",justifyContent:"center",padding:"0 3px",pointerEvents:"none"}}>{chatNoLeidos}</span>}</div>{Bell}</div>}/>
         <div style={{ padding:"18px 18px" }}>
-          <MapaParcela municipio={trabajoActivo.municipio} direccion={trabajoActivo.direccion} lat={c.lat+(Math.random()-.5)*.005} lng={c.lng+(Math.random()-.5)*.005}/>
+          <MapaParcela municipio={trabajoActivo.municipio} direccion={trabajoActivo.direccion} lat={trabajoActivo._lat} lng={trabajoActivo._lng}/>
           <div style={{ background:`linear-gradient(135deg,${C.verde},${C.verde3})`, borderRadius:20, padding:"16px 20px", color:"#fff", marginBottom:14 }}>
             <div style={{ fontWeight:800, fontSize:17, marginBottom:8 }}>📍 {trabajoActivo.direccion}, {trabajoActivo.municipio}</div>
             <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr 1fr", gap:10 }}>
@@ -1164,8 +1201,8 @@ function PantallaProveedor({ user, onLogout }) {
               <PhotoBox label="Después del corte" photo={trabajoActivo.fotoDespues} onCapture={f=>setTrabajoActivo(p=>({...p,fotoDespues:f}))} disabled={!trabajoActivo.fotoAntes}/>
             </div>
           </div>
-          <button onClick={completar} disabled={!listo} style={{ ...ST.btnG(listo?C.verde2:"#aaa") }}>
-            {listo?`Completar trabajo · $${trabajoActivo.precio_total}`:"Se requieren ambas fotos"}
+          <button onClick={completar} disabled={!listo||subiendo} style={{ ...ST.btnG(listo&&!subiendo?C.verde2:"#aaa") }}>
+            {subiendo?<><Spinner color="#fff"/>Subiendo fotos…</>:listo?`Completar trabajo · $${trabajoActivo.precio_total}`:"Se requieren ambas fotos"}
           </button>
         </div>
         {reseñaModal&&<ModalReseña titulo="¿Cómo fue el cliente?" onEnviar={async ({ stars, texto })=>{ await sb.from("resenas").insert({ solicitud_id:trabajoActivo.id, autor_id:user.id, autor_nombre:user.nombre, receptor_id:trabajoActivo.cliente_id, stars, texto, tipo:"proveedor" }); setReseñaModal(false); setTrabajoActivo(null); setSub("dashboard"); }} onCerrar={()=>{ setReseñaModal(false); setTrabajoActivo(null); setSub("dashboard"); }}/>}
@@ -1223,7 +1260,7 @@ function PantallaProveedor({ user, onLogout }) {
                 <div style={{ fontSize:13 }}>Aún no tienes reseñas. Aparecerán aquí después de cada servicio completado.</div>
               </div>
             ) : resenasPropias.map((r,i)=>(
-              <div key={i} style={{ borderBottom:i<resenasPropias.length-1?`1px solid ${C.borde}`:"none", paddingBottom:i<resenasPropias.length-1?12:0, marginBottom:i<resenasPropias.length-1?12:0 }}>
+              <div key={r.id} style={{ borderBottom:i<resenasPropias.length-1?`1px solid ${C.borde}`:"none", paddingBottom:i<resenasPropias.length-1?12:0, marginBottom:i<resenasPropias.length-1?12:0 }}>
                 <div style={{ display:"flex", justifyContent:"space-between", marginBottom:3 }}>
                   <span style={{ fontWeight:700, fontSize:13, color:C.texto }}>{r.autor_nombre||"Cliente"}</span>
                   <span style={{ fontSize:11, color:C.gris }}>{new Date(r.created_at).toLocaleDateString("es-PR",{ day:"2-digit", month:"short" })}</span>
@@ -1286,8 +1323,8 @@ function PantallaProveedor({ user, onLogout }) {
             {completados.length>0&&(
               <>
                 <div style={{ ...ST.sec, marginTop:8 }}>Completados hoy</div>
-                {completados.map((t,i)=>(
-                  <div key={i} style={{ background:"#d8f3dc", borderRadius:14, padding:"12px 16px", marginBottom:8, display:"flex", justifyContent:"space-between", alignItems:"center" }}>
+                {completados.map(t=>(
+                  <div key={t.id} style={{ background:"#d8f3dc", borderRadius:14, padding:"12px 16px", marginBottom:8, display:"flex", justifyContent:"space-between", alignItems:"center" }}>
                     <div><div style={{ fontWeight:600, fontSize:13, color:C.verde }}>{t.direccion}, {t.municipio}</div><div style={{ fontSize:11, color:C.verde3, marginTop:2 }}>✓ Completado</div></div>
                     <div style={{ fontWeight:800, color:C.verde2, fontSize:18 }}>${t.precio_total}</div>
                   </div>
@@ -1469,8 +1506,8 @@ function App() {
   );
 }
 
-    const root = ReactDOM.createRoot(document.getElementById('root'));
-    root.render(<App/>);
+
+ReactDOM.createRoot(document.getElementById('root')).render(<App/>);
   </script>
 </body>
 </html>
